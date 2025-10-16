@@ -5,5 +5,10 @@
 finalizador
 # Receptor
 receptor
-# inicializador
+# Inicializador
 inicializador
+# Emisor
+emisor
+
+# Make
+*.o

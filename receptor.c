@@ -1,55 +1,76 @@
-#include "shared.h"
+#include "ipc_utils.c"
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-typedef struct
-{
-    Shared *sh;
-    uint32_t id;
-} RxArgs;
+Shared *g_sh = NULL;
 
-static gpointer receiver_fn(gpointer p)
+void handle_sigint(int sig)
 {
-    RxArgs *a = (RxArgs *)p;
-    g_atomic_int_inc(&a->sh->receivers_live);
-    GString *out = g_string_new(NULL);
-    Slot r;
-    while (ring_pop(a->sh, &r))
+    (void)sig;
+    if (g_sh)
     {
-        uint8_t plain = r.ch_enc ^ a->sh->key;
-        g_string_append_c(out, (char)plain);
-        g_atomic_int_inc(&a->sh->total_read);
-
-        printf(ANSI_YELLOW "[Receptor %u] idx=%u plain=%u('%c') ts=%" G_GINT64_FORMAT ANSI_RESET "\n",
-               a->id, r.index, plain, (plain >= 32 && plain < 127) ? plain : '.', r.ts_us);
-
-        if (!a->sh->automatic_mode)
-            getchar();
-        else if (a->sh->interval_ms)
-            g_usleep(a->sh->interval_ms * 1000);
+        printf(ANSI_CYAN "\n[Receptor] Saliendo...\n" ANSI_RESET);
     }
-    printf(ANSI_BOLD ANSI_MAGENTA "\n[Receptor %u] Texto reconstruido:\n%s\n" ANSI_RESET, a->id, out->str);
-    g_string_free(out, TRUE);
-    g_atomic_int_dec_and_test(&a->sh->receivers_live);
-    return NULL;
+    exit(0);
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 4)
+    if (argc < 5)
     {
-        fprintf(stderr, "Uso: %s <cap> <auto|manual> <key>\n", argv[0]);
+        fprintf(stderr, "Uso: %s <shm_id> <auto|manual> <interval_ms> <key>\n", argv[0]);
         return 1;
     }
-    Shared s;
-    ring_init(&s, (uint32_t)g_ascii_strtoull(argv[1], NULL, 10));
-    s.automatic_mode = g_strcmp0(argv[2], "auto") == 0;
-    s.interval_ms = s.automatic_mode ? 150 : 0;
-    s.key = (uint8_t)g_ascii_strtoull(argv[3], NULL, 10);
+    const char *shm_name = argv[1];
+    bool automatic_mode = strcmp(argv[2], "auto") == 0;
+    unsigned int interval_ms = (unsigned int)strtoul(argv[3], NULL, 10);
+    uint8_t key = (uint8_t)strtoul(argv[4], NULL, 10);
 
-    g_atomic_int_inc(&s.receivers_total);
-    RxArgs args = {.sh = &s, .id = 1};
-    GThread *th = g_thread_new("receptor", receiver_fn, &args);
-    g_thread_join(th);
+    FILE *archivo = fopen("output.txt", "r+");
+    if (archivo == NULL)
+    {
+        perror("fopen: no se pudo abrir output.txt");
+        return 1;
+    }
 
-    ring_destroy(&s);
+    Shared *sh = map_shared_memory(shm_name, O_RDWR, sizeof(Shared));
+    if (!sh)
+        return 1;
+    g_sh = sh;
+    signal(SIGINT, handle_sigint);
+
+    uint32_t id = atomic_fetch_add(&sh->receivers_total, 1) + 1;
+    atomic_fetch_add(&sh->receivers_live, 1);
+
+    Slot r;
+    while (ring_pop(sh, &r))
+    {
+        uint8_t plain = r.ch_enc ^ key;
+        atomic_fetch_add(&sh->total_read, 1);
+
+        printf(ANSI_YELLOW "[Receptor %u] idx=%u plain='%c'\n" ANSI_RESET, id, r.index, plain);
+
+        pthread_mutex_lock(&sh->file_mtx);
+
+        fseek(archivo, r.index, SEEK_SET);
+        fputc(plain, archivo);
+        fflush(archivo);
+
+        pthread_mutex_unlock(&sh->file_mtx);
+
+        if (!automatic_mode)
+        {
+            getchar();
+        }
+        else if (interval_ms > 0)
+        {
+            usleep(interval_ms * 1000);
+        }
+    }
+
+    atomic_fetch_sub(&sh->receivers_live, 1);
+    unmap_shared_memory(sh, sizeof(Shared));
     return 0;
 }

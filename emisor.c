@@ -1,85 +1,86 @@
-// emisor.c
-#include "shared.h"
+#include "ipc_utils.c"
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
 
-typedef struct
+Shared *g_sh = NULL; // Puntero global para el manejador de señales
+
+// Obtiene el tiempo actual en microsegundos
+int64_t now_us(void)
 {
-    Shared *sh;
-    GPtrArray *data;
-    uint32_t id;
-} EmArgs;
-
-static gpointer emitter_fn(gpointer p)
-{
-    EmArgs *a = (EmArgs *)p;
-    g_atomic_int_inc(&a->sh->emitters_live);
-    for (guint i = 0; i < a->data->len; i++)
-    {
-        if (a->sh->shutting_down)
-            break;
-        uint8_t ch = GPOINTER_TO_UINT(a->data->pdata[i]);
-        Slot e = {
-            .ch_enc = (uint8_t)(ch ^ a->sh->key),
-            .index = g_atomic_int_add(&a->sh->total_written, 1),
-            .ts_us = now_us(),
-            .producer_id = a->id};
-        if (!ring_push(a->sh, e))
-            break;
-
-        printf(ANSI_GREEN "[Emisor %u] idx=%u enc=%u ts=%" G_GINT64_FORMAT ANSI_RESET "\n",
-               a->id, e.index, e.ch_enc, e.ts_us);
-
-        if (!a->sh->automatic_mode)
-        {
-            getchar(); // modo manual: enter para continuar
-        }
-        else if (a->sh->interval_ms)
-        {
-            g_usleep(a->sh->interval_ms * 1000);
-        }
-    }
-    g_atomic_int_dec_and_test(&a->sh->emitters_live);
-    return NULL;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
-static GPtrArray *load_chars(const char *path)
+void handle_sigint(int sig)
 {
-    GPtrArray *arr = g_ptr_array_new();
-    gchar *content = NULL;
-    gsize len = 0;
-    if (!g_file_get_contents(path, &content, &len, NULL))
+    (void)sig;
+    if (g_sh)
     {
-        fprintf(stderr, "No se pudo leer %s\n", path);
-        return arr;
+        printf(ANSI_CYAN "\n[Emisor] Saliendo y decrementando contador de vivos...\n" ANSI_RESET);
+        atomic_fetch_sub(&g_sh->emitters_live, 1);
     }
-    for (gsize i = 0; i < len; i++)
-    {
-        g_ptr_array_add(arr, GUINT_TO_POINTER((guint)(uint8_t)content[i]));
-    }
-    g_free(content);
-    return arr;
+    exit(0);
 }
 
 int main(int argc, char **argv)
 {
     if (argc < 5)
     {
-        fprintf(stderr, "Uso: %s <cap> <auto|manual> <key> <archivo>\n", argv[0]);
+        fprintf(stderr, "Uso: %s <shm_id> <auto|manual> <interval_ms> <key>\n", argv[0]);
         return 1;
     }
-    Shared s;
-    ring_init(&s, (uint32_t)g_ascii_strtoull(argv[1], NULL, 10));
-    s.automatic_mode = g_strcmp0(argv[2], "auto") == 0;
-    s.interval_ms = s.automatic_mode ? 150 : 0;
-    s.key = (uint8_t)g_ascii_strtoull(argv[3], NULL, 10);
+    const char *shm_name = argv[1];
+    bool automatic_mode = strcmp(argv[2], "auto") == 0;
+    unsigned int interval_ms = (unsigned int)strtoul(argv[3], NULL, 10);
+    uint8_t key = (uint8_t)strtoul(argv[4], NULL, 10);
 
-    GPtrArray *data = load_chars(argv[4]);
-    g_atomic_int_inc(&s.emitters_total);
+    Shared *sh = map_shared_memory(shm_name, O_RDWR, sizeof(Shared));
+    if (!sh)
+        return 1;
+    g_sh = sh;
+    signal(SIGINT, handle_sigint);
 
-    EmArgs args = {.sh = &s, .data = data, .id = 1};
-    GThread *th = g_thread_new("emisor", emitter_fn, &args);
-    g_thread_join(th);
+    // Asignación de ID atómica y segura
+    uint32_t id = atomic_fetch_add(&sh->emitters_total, 1) + 1;
+    atomic_fetch_add(&sh->emitters_live, 1);
 
-    g_ptr_array_free(data, TRUE);
-    ring_destroy(&s);
+    int total_emitters_snapshot = atomic_load(&sh->emitters_total);
+
+    for (size_t i = id - 1; i < sh->data_len; i += total_emitters_snapshot)
+    {
+        if (atomic_load(&sh->shutting_down))
+            break;
+
+        uint8_t ch = (uint8_t)sh->data_buffer[i];
+        Slot e = {
+            .ch_enc = (uint8_t)(ch ^ key),
+            .index = (uint32_t)i,
+            .ts_us = now_us(),
+            .producer_id = id};
+        atomic_fetch_add(&sh->total_written, 1);
+
+        if (!ring_push(sh, e))
+            break;
+
+        printf(ANSI_GREEN "[Emisor %u] idx=%u enc=%u ts=%" PRId64 ANSI_RESET "\n", id, e.index, e.ch_enc, e.ts_us);
+
+        if (!automatic_mode)
+        {
+            printf(ANSI_CYAN "(Enter para continuar emisor %u)\n" ANSI_RESET, id);
+            getchar();
+        }
+        else if (interval_ms > 0)
+        {
+            usleep(interval_ms * 1000);
+        }
+    }
+
+    atomic_fetch_sub(&sh->emitters_live, 1);
+    unmap_shared_memory(sh, sizeof(Shared));
     return 0;
 }

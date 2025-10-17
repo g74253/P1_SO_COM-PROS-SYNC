@@ -26,6 +26,7 @@ long load_file_into_shm(const char *path, Shared *sh)
     return len;
 }
 
+// Inicializa el espacio compartido
 void initialize_shared_struct(Shared *s, uint32_t cap)
 {
     memset(s, 0, offsetof(Shared, data_len));
@@ -42,6 +43,7 @@ void initialize_shared_struct(Shared *s, uint32_t cap)
     atomic_init(&s->receivers_live, 0);
     atomic_init(&s->receivers_total, 0);
 
+    // Inicia los atributos del mutex y cond
     pthread_mutexattr_t mattr;
     pthread_condattr_t cattr;
     pthread_mutexattr_init(&mattr);
@@ -49,11 +51,13 @@ void initialize_shared_struct(Shared *s, uint32_t cap)
     pthread_condattr_init(&cattr);
     pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
 
+    // Inicia los mutex y cond
     pthread_mutex_init(&s->mtx, &mattr);
     pthread_mutex_init(&s->file_mtx, &mattr);
     pthread_cond_init(&s->not_empty, &cattr);
     pthread_cond_init(&s->not_full, &cattr);
 
+    // Destruye los atributos
     pthread_mutexattr_destroy(&mattr);
     pthread_condattr_destroy(&cattr);
 }
@@ -70,16 +74,19 @@ int main(int argc, char **argv)
     uint32_t cap = (uint32_t)strtoul(argv[2], NULL, 10);
     const char *file = argv[3];
 
+    // Borra todo lo que esta en el archivo
     FILE *f = fopen("output.txt", "w");
     if (f)
         fclose(f);
 
+    // Construccion del espacio compartido
     shm_unlink(shm_name);
     int fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
     ftruncate(fd, sizeof(Shared));
     Shared *sh = mmap(NULL, sizeof(Shared), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
 
+    // Inicia espacio compartido
     initialize_shared_struct(sh, cap);
 
     if (load_file_into_shm(file, sh) < 0)

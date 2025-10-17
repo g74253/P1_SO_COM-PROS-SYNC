@@ -3,8 +3,10 @@
 #include <unistd.h>
 #include <signal.h>
 
+// Definicion temprana del Shared
 static Shared *g_shm_ptr = NULL;
 
+// Finalizador
 static void on_sig(int signo)
 {
     (void)signo;
@@ -23,8 +25,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Nombre del espacio compartido
     const char *shm_name = argv[1];
 
+    // Conexion con el espacio compartido
     Shared *sh = map_shared_memory(shm_name, O_RDWR, sizeof(Shared));
     if (!sh)
         return 1;
@@ -38,12 +42,12 @@ int main(int argc, char **argv)
     {
         if (atomic_load(&sh->emitters_total) > 0)
         {
-            // Condición 1: ¿Han terminado TODOS los emisores su trabajo?
+            // ¿Han terminado TODOS los emisores su trabajo?
             bool all_emitters_finished = (atomic_load(&sh->emitters_live) == 0);
 
             if (all_emitters_finished)
             {
-                // Condición 2: ¿Está el buffer vacío?
+                // ¿Está el buffer vacío?
                 bool buffer_is_empty = (atomic_load(&sh->count) == 0);
 
                 if (buffer_is_empty)

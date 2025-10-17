@@ -4,8 +4,10 @@
 #include <string.h>
 #include <unistd.h>
 
+// Definicion temprana del Shared
 Shared *g_sh = NULL;
 
+// Finalizador
 void handle_sigint(int sig)
 {
     (void)sig;
@@ -28,6 +30,7 @@ int main(int argc, char **argv)
     unsigned int interval_ms = (unsigned int)strtoul(argv[3], NULL, 10);
     uint8_t key = (uint8_t)strtoul(argv[4], NULL, 10);
 
+    // Abre archivo de escritura
     FILE *archivo = fopen("output.txt", "r+");
     if (archivo == NULL)
     {
@@ -35,6 +38,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Conexion con el espacio compartido
     Shared *sh = map_shared_memory(shm_name, O_RDWR, sizeof(Shared));
     if (!sh)
         return 1;
@@ -45,6 +49,7 @@ int main(int argc, char **argv)
     atomic_fetch_add(&sh->receivers_live, 1);
 
     Slot r;
+    // Lectura
     while (ring_pop(sh, &r))
     {
         uint8_t plain = r.ch_enc ^ key;

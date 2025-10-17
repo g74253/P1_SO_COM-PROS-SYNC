@@ -28,7 +28,7 @@ typedef struct
 
 typedef struct
 {
-    // Buffer circular (ahora como un array de tamaño fijo dentro de la struct)
+    // Buffer circular
     Slot buf[MAX_CAP];
     uint32_t cap;
     atomic_uint head;

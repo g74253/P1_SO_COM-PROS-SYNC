@@ -16,6 +16,7 @@ int64_t now_us(void)
     return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
+// Finalizador
 void handle_sigint(int sig)
 {
     (void)sig;
@@ -39,13 +40,14 @@ int main(int argc, char **argv)
     unsigned int interval_ms = (unsigned int)strtoul(argv[3], NULL, 10);
     uint8_t key = (uint8_t)strtoul(argv[4], NULL, 10);
 
+    // Conexion con el espacio compartido
     Shared *sh = map_shared_memory(shm_name, O_RDWR, sizeof(Shared));
     if (!sh)
         return 1;
     g_sh = sh;
     signal(SIGINT, handle_sigint);
 
-    // Asignación de ID atómica y segura
+    // Asignación de ID
     uint32_t id = atomic_fetch_add(&sh->emitters_total, 1) + 1;
     atomic_fetch_add(&sh->emitters_live, 1);
 
@@ -57,6 +59,7 @@ int main(int argc, char **argv)
             break;
 
         uint8_t ch = (uint8_t)sh->data_buffer[i];
+        // Data para el ringbuffer
         Slot e = {
             .ch_enc = (uint8_t)(ch ^ key),
             .index = (uint32_t)i,
@@ -64,16 +67,19 @@ int main(int argc, char **argv)
             .producer_id = id};
         atomic_fetch_add(&sh->total_written, 1);
 
+        // Push a ringbuffer (mutex y cond)
         if (!ring_push(sh, e))
             break;
 
         printf(ANSI_GREEN "[Emisor %u] idx=%u enc=%u ts=%" PRId64 ANSI_RESET "\n", id, e.index, e.ch_enc, e.ts_us);
 
+        // Manual
         if (!automatic_mode)
         {
             printf(ANSI_CYAN "(Enter para continuar emisor %u)\n" ANSI_RESET, id);
             getchar();
         }
+        // Auto
         else if (interval_ms > 0)
         {
             usleep(interval_ms * 1000);

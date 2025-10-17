@@ -12,8 +12,20 @@ Shared *g_sh = NULL; // Puntero global para el manejador de señales
 int64_t now_us(void)
 {
     struct timeval tv;
+    struct tm *tm_info;
+    time_t now_sec;
+    int minute, second, decisecond;
     gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+
+    now_sec = tv.tv_sec;
+    tm_info = localtime(&now_sec);
+
+    minute = tm_info->tm_min;
+    second = tm_info->tm_sec;
+
+    decisecond = tv.tv_usec / 100000;
+
+    return (int64_t)(minute * 1000 + second * 10 + decisecond);
 }
 
 // Finalizador
@@ -71,7 +83,7 @@ int main(int argc, char **argv)
         if (!ring_push(sh, e))
             break;
 
-        printf(ANSI_GREEN "[Emisor %u] idx=%u enc=%u ts=%" PRId64 ANSI_RESET "\n", id, e.index, e.ch_enc, e.ts_us);
+        printf(ANSI_GREEN ANSI_BOLD "[Emisor %u]\t " ANSI_RESET ANSI_CYAN "idx=%u\t " ANSI_MAGENTA "enc=%u('%u')\t " ANSI_YELLOW "ts=%" PRId64 ANSI_RESET "\n", id, e.index, e.ch_enc, ch, e.ts_us);
 
         // Manual
         if (!automatic_mode)

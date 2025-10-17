@@ -55,7 +55,7 @@ int main(int argc, char **argv)
         uint8_t plain = r.ch_enc ^ key;
         atomic_fetch_add(&sh->total_read, 1);
 
-        printf(ANSI_YELLOW "[Receptor %u] idx=%u plain='%c'\n" ANSI_RESET, id, r.index, plain);
+        printf(ANSI_GREEN ANSI_BOLD "[Receptor %u]\t " ANSI_RESET ANSI_CYAN "idx=%u\t " ANSI_MAGENTA "plain='%c'\t " ANSI_YELLOW "ts=%" PRId64 "\n" ANSI_RESET, id, r.index, plain, r.ts_us);
 
         pthread_mutex_lock(&sh->file_mtx);
 
